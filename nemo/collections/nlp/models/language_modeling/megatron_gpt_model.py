@@ -150,7 +150,8 @@ def mcore_supports_moe() -> bool:
 
 
 ## TODO: This function will not work if TE is not installed
-def get_specs(spec_name, transformer_config=None, use_te=True, hyena_cfg: Dict = None, fp8=False):
+def get_specs(spec_name, transformer_config=None, use_te=True, hyena_cfg: Dict = None, fp8=False,
+              qk_layernorm=False, downscale_residual=None, attn_layernorm=True, mlp_layernorm=True):
     from nemo.collections.nlp.models.language_modeling.megatron.gemma2.gemma2_spec import get_gemma2_layer_spec
 
     # else cases for backwards compatibility with neva
@@ -164,7 +165,15 @@ def get_specs(spec_name, transformer_config=None, use_te=True, hyena_cfg: Dict =
         spec_name = 'te_gpt'
     name_spec_dict = {
         "": get_gpt_layer_local_spec(num_experts, moe_grouped_gemm),
-        "te_gpt": get_gpt_layer_with_transformer_engine_spec(num_experts, moe_grouped_gemm, fp8=fp8),
+        "te_gpt": get_gpt_layer_with_transformer_engine_spec(
+            num_experts=num_experts,
+            moe_grouped_gemm=moe_grouped_gemm,
+            qk_layernorm=qk_layernorm,
+            fp8=fp8,
+            downscale_residual=downscale_residual,
+            attn_layernorm=attn_layernorm,
+            mlp_layernorm=mlp_layernorm,
+        ),
         "megatron_falcon_gpt": get_falcon_layer_spec(),
         "megatron_gemma2": get_gemma2_layer_spec(),
         "megatron_gpt_full_te_layer_autocast": get_gpt_full_te_layer_autocast_spec(transformer_config),
@@ -475,15 +484,18 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
     def model_provider_func(self, pre_process, post_process):
         """Model depends on pipeline paralellism."""
         if self.mcore_gpt:
-
             model = MCoreGPTModel(
                 config=self.transformer_config,
                 transformer_layer_spec=get_specs(
                     self.spec_name,
-                    self.transformer_config,
-                    self.transformer_engine,
-                    self.cfg.get('hyena', None),
-                    self.cfg.get('fp8', False),
+                    transformer_config=self.transformer_config,
+                    use_te=self.transformer_engine,
+                    hyena_cfg=self.cfg.get('hyena', None),
+                    fp8=self.cfg.get('fp8', False),
+                    qk_layernorm=self.cfg.get('qk_layernorm', False),
+                    downscale_residual=self.cfg.get('downscale_residual', None),
+                    attn_layernorm=self.cfg.get('attn_layernorm', True),
+                    mlp_layernorm=self.cfg.get('mlp_layernorm', True),
                 ),
                 vocab_size=self.cfg.get('override_vocab_size', self.padded_vocab_size),
                 max_sequence_length=self.cfg.get('encoder_seq_length', 512),
@@ -495,6 +507,8 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                 rotary_percent=self.cfg.get('rotary_percentage', 1.0),
                 seq_len_interpolation_factor=self.cfg.get('seq_len_interpolation_factor', None),
                 rotary_base=self.cfg.get('rotary_base', 10000),
+                log_kurtosis=self.cfg.get('log_kurtosis', False),
+                final_layernorm=self.cfg.get('final_layernorm', True),
             )
             mcore_model_customize(self.cfg, model)
         else:
